@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+jobs:
+  lint-and-smoke:
+    name: Python ${{ matrix.python-version }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # ── Syntax check (catches parse errors on all scripts) ─────────────────
+      - name: Syntax check
+        run: |
+          python -m py_compile tools/plugins_sync.py
+          python -m py_compile tools/build_manifest.py
+          python -m py_compile tools/clean_quarantine.py
+
+      # ── Smoke test: --help must exit 0 ────────────────────────────────────
+      - name: plugins_sync --help
+        run: python tools/plugins_sync.py --help
+
+      - name: build_manifest --help
+        run: python tools/build_manifest.py --help
+
+      - name: clean_quarantine --help
+        run: python tools/clean_quarantine.py --help
+
+      # ── --status with no config must exit 1, not crash with a traceback ───
+      - name: plugins_sync --status (no config → controlled exit)
+        shell: bash
+        run: |
+          python tools/plugins_sync.py --status; code=$?
+          echo "Exit code: $code"
+          if [ "$code" -gt 1 ]; then
+            echo "Unexpected exit code $code (expected 0-1)"
+            exit 1
+          fi
