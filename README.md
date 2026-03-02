@@ -1,0 +1,249 @@
+# Servoy Gold Plugin Sync
+
+Keeps every developer's local Servoy plugin folder **automatically in sync** with a central "Gold" share – without touching private or unreleased plugins.
+
+---
+
+## How it works
+
+```
+K:\SERVOY_GOLD\                        ← central network share (Gold Maintainer manages this)
+  plugins\
+    servoy-2025.12.1.4123\
+      manifest.json                    ← list of every team plugin + SHA-256 hash
+      files\                           ← the actual .jar files
+
+Each developer's machine:
+  plugins_sync.py  reads the manifest and syncs the local folder
+  start-servoy.cmd / start-servoy.sh   calls the sync, then launches Servoy
+```
+
+**Managed plugins** (listed in the manifest) are installed, updated, or quarantined automatically.  
+**Unmanaged / private plugins** are never touched.
+
+---
+
+## Repository structure
+
+```
+svy-gold-script/
+│
+├── tools/
+│   ├── plugins_sync.py        ← sync client (all platforms)
+│   ├── clean_quarantine.py    ← remove old quarantine folders
+│   ├── build_manifest.py      ← manifest generator (Gold Maintainer only)
+│   ├── start-servoy.cmd       ← Servoy launcher for Windows
+│   └── start-servoy.sh        ← Servoy launcher for macOS / Linux
+│
+└── docs/
+    ├── example.servoy-plugin-sync.json   ← config template
+    ├── docs_servoy-plugin-sync.md        ← full architecture reference
+    ├── docs_plugins_sync.md              ← plugins_sync.py reference
+    ├── docs_clean_quarantine.md          ← clean_quarantine.py reference
+    ├── docs_build_manifest.md            ← build_manifest.py reference
+    ├── docs_start-servoy-cmd.md          ← start-servoy.cmd reference
+    ├── docs_start-servoy-sh.md           ← start-servoy.sh reference
+    └── *_de.md                           ← German versions of all docs above
+```
+
+---
+
+## Getting Started – Developer
+
+> You only need `plugins_sync.py` and the launcher for your OS.  
+> The Gold Maintainer handles the share and the manifest.
+
+### Prerequisites
+
+| Tool | Where to get it |
+|---|---|
+| Python 3.10+ | https://python.org – tick "Add to PATH" on Windows |
+| Access to `K:\SERVOY_GOLD\` | Ask your admin to map the network share |
+| Servoy installed locally | Your existing installation |
+
+---
+
+### Step 1 – Get the scripts
+
+Clone this repo (or download the ZIP) to a permanent location on your machine, for example:
+
+**Windows:**
+```
+C:\dev\servoy-gold-sync\
+```
+
+**macOS / Linux:**
+```
+~/dev/servoy-gold-sync/
+```
+
+---
+
+### Step 2 – Create your personal config file
+
+Copy the template:
+
+**Windows (CMD):**
+```cmd
+copy "C:\dev\servoy-gold-sync\docs\example.servoy-plugin-sync.json" "%USERPROFILE%\.servoy-plugin-sync.json"
+notepad "%USERPROFILE%\.servoy-plugin-sync.json"
+```
+
+**macOS / Linux:**
+```bash
+cp ~/dev/servoy-gold-sync/docs/example.servoy-plugin-sync.json ~/.servoy-plugin-sync.json
+nano ~/.servoy-plugin-sync.json
+```
+
+The file looks like this – **edit `servoy_home` to match your local Servoy installation**:
+
+```json
+{
+  "gold_root":      "K:\\SERVOY_GOLD\\",
+  "servoy_home":    "C:\\servoys\\2025.12.1.4123\\",
+  "servoy_version": "2025.12.1.4123",
+  "mode":           "quarantine"
+}
+```
+
+| Field | What to change |
+|---|---|
+| `gold_root` | Usually stays `K:\\SERVOY_GOLD\\`. Only change if your drive letter differs. |
+| `servoy_home` | **Your** local Servoy folder – the one that contains `developer\` and `application_server\`. |
+| `servoy_version` | Must match the version folder on the share. Ask the Gold Maintainer if unsure. |
+| `mode` | Leave as `quarantine` (safest option). |
+
+> **Tip – finding `servoy_home`:** Open your Servoy installation folder in Explorer / Finder. You're looking for the folder that contains both `developer` and `application_server` as direct subfolders. Use that full path.
+
+**macOS / Linux config example:**
+```json
+{
+  "gold_root":      "/Volumes/SERVOY_GOLD/",
+  "servoy_home":    "/Applications/Servoy/2025.12.1.4123/",
+  "servoy_version": "2025.12.1.4123",
+  "mode":           "quarantine"
+}
+```
+
+---
+
+### Step 3 – Create a launcher shortcut
+
+Replace your existing Servoy shortcut with the wrapper script.
+
+**Windows – create a Desktop shortcut:**
+```powershell
+$ws  = New-Object -ComObject WScript.Shell
+$lnk = $ws.CreateShortcut("$env:USERPROFILE\Desktop\Servoy.lnk")
+$lnk.TargetPath       = "C:\dev\servoy-gold-sync\tools\start-servoy.cmd"
+$lnk.WorkingDirectory = "C:\dev\servoy-gold-sync\tools"
+$lnk.Save()
+```
+
+**macOS / Linux – make the script executable:**
+```bash
+chmod +x ~/dev/servoy-gold-sync/tools/start-servoy.sh
+```
+
+Then create an alias or a launcher pointing to `start-servoy.sh`.
+
+---
+
+### That's it
+
+From now on:
+1. Open Servoy via `start-servoy.cmd` (Windows) or `start-servoy.sh` (macOS/Linux).
+2. The sync runs automatically and prints what it did.
+3. If the sync fails for any reason (share offline, file locked), **Servoy still starts** – you just see a warning.
+
+---
+
+## Getting Started – Gold Maintainer
+
+You manage the share and regenerate the manifest whenever plugins change.
+
+### Step 1 – Set up the share structure
+
+On `K:\SERVOY_GOLD\` create:
+
+```
+K:\SERVOY_GOLD\
+  plugins\
+    servoy-2025.12.1.4123\
+      files\          ← copy all team plugin .jar files here
+      manifest.json   ← generated by build_manifest.py
+```
+
+### Step 2 – Copy team plugins into `files\`
+
+Place every plugin the whole team should have into `files\`. Subdirectories are supported.
+
+### Step 3 – Generate the manifest
+
+```cmd
+python C:\dev\servoy-gold-sync\tools\build_manifest.py ^
+    --files-dir   "K:\SERVOY_GOLD\plugins\servoy-2025.12.1.4123\files" ^
+    --out         "K:\SERVOY_GOLD\plugins\servoy-2025.12.1.4123\manifest.json" ^
+    --servoy-version "2025.12.1.4123"
+```
+
+### Step 4 – Communicate changes
+
+Tell the team what changed (Slack/Teams message is fine). Each developer will pick up the changes automatically at their next Servoy start.
+
+### Updating plugins later
+
+1. Update / add / remove files in `files\`.
+2. Re-run `build_manifest.py` to regenerate the manifest.
+3. Done – no action needed from developers.
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| `Config file not found` | Create `~/.servoy-plugin-sync.json` (Step 2 above) |
+| `Gold Share root is not accessible` | Map `K:\` in Windows Explorer; on macOS/Linux mount the share |
+| `Python 3 not found` | Install Python 3 and add it to PATH |
+| `Sync finished with issues (exit code: 2)` | Check the log at `<servoy_home>\application_server\plugins\gold_plugins_sync.log` |
+| File locked / permission error | Close Servoy fully, then run the launcher again |
+| Wrong plugins after update | Check `servoy_version` in your config matches the current version |
+
+### Check sync status without running a sync
+
+```cmd
+python tools/plugins_sync.py --status
+```
+
+Shows each managed plugin as `OK`, `MISSING`, or `OUTDATED` – without making
+any changes. Exit 0 = everything up-to-date, exit 2 = action needed.
+
+### Clean up old quarantine folders
+
+Plugins that were removed from the manifest are moved to
+`application_server/plugins__quarantine/YYYY-MM-DD/` – never permanently
+deleted at sync time. To remove folders older than 30 days:
+
+```cmd
+python tools/clean_quarantine.py
+```
+
+Or preview first:
+
+```cmd
+python tools/clean_quarantine.py --dry-run
+```
+
+See [clean_quarantine.py reference](docs/docs_clean_quarantine.md) for details.
+
+---
+
+## Detailed documentation
+
+- [Architecture & design decisions](docs/docs_servoy-plugin-sync.md)
+- [plugins_sync.py reference](docs/docs_plugins_sync.md)
+- [clean_quarantine.py reference](docs/docs_clean_quarantine.md)
+- [build_manifest.py reference](docs/docs_build_manifest.md)
+- [start-servoy.cmd reference](docs/docs_start-servoy-cmd.md)
+- [start-servoy.sh reference](docs/docs_start-servoy-sh.md)
