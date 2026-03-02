@@ -16,7 +16,8 @@ Config file (default: %USERPROFILE%\\.servoy-plugin-sync.json):
         "gold_root":       "K:\\\\SERVOY_GOLD\\\\",
         "servoy_home":     "C:\\\\servoys\\\\2025.12.1.4123\\\\",
         "servoy_version":  "2025.12.1.4123",
-        "mode":            "quarantine"   // optional, default = quarantine
+        "mode":            "quarantine",  // optional, default = quarantine
+        "private_plugins": ["hvo-pdf.jar", "my-team/*"]  // optional
     }
 
 Exit codes:
@@ -28,6 +29,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import logging
@@ -125,6 +127,7 @@ def load_config(path: str, logger: logging.Logger) -> dict:
         sys.exit(1)
 
     cfg.setdefault("mode", "quarantine")
+    cfg.setdefault("private_plugins", [])
     return cfg
 
 
@@ -500,6 +503,26 @@ def validate_versions(
 
 
 # ---------------------------------------------------------------------------
+# Private-plugin pattern matching
+# ---------------------------------------------------------------------------
+
+def is_private(rel_path: str, private_patterns: list[str]) -> bool:
+    """
+    Return True if *rel_path* matches any pattern in *private_patterns*.
+
+    Patterns use :mod:`fnmatch` syntax, e.g.::
+
+        "hvo-pdf.jar"   – exact filename anywhere in the plugins dir
+        "ai/*"          – all files inside the ai/ subfolder
+        "dev-*.jar"     – any jar whose name starts with dev-
+    """
+    for pattern in private_patterns:
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Status report  (--status)
 # ---------------------------------------------------------------------------
 
@@ -609,9 +632,11 @@ def status_report(
         issues += len([p for p in to_quarantine
                        if os.path.exists(os.path.join(local_plugins_dir, p.replace("/", os.sep)))])
 
-    # ---- Unmanaged / private plugins ----------------------------------- #
+    # ---- Unmanaged plugins: explicitly private vs. orphaned ------------ #
+    private_patterns      = cfg.get("private_plugins", [])
     all_managed_and_state = current_manifest_paths | previous_managed
-    unmanaged = []
+    explicitly_private    = []
+    orphaned              = []
     for root, _dirs, files in os.walk(local_plugins_dir):
         for fname in files:
             abs_path = os.path.join(root, fname)
@@ -619,14 +644,26 @@ def status_report(
             # Skip internal files
             if rel in (STATE_FILENAME, LOG_FILENAME) or rel.endswith(".log"):
                 continue
-            if rel not in all_managed_and_state:
-                unmanaged.append(rel)
+            if rel in all_managed_and_state:
+                continue
+            if is_private(rel, private_patterns):
+                explicitly_private.append(rel)
+            else:
+                orphaned.append(rel)
 
-    if unmanaged:
+    if orphaned:
         print(f"\n  {SEP}")
-        print("  Unmanaged (private) plugins – will never be touched:")
+        print("  Orphaned plugins (not in manifest, not private) – will be QUARANTINED on next sync:")
         print(f"  {SEP}")
-        for p in sorted(unmanaged):
+        for p in sorted(orphaned):
+            print(f"  {p}")
+        issues += len(orphaned)
+
+    if explicitly_private:
+        print(f"\n  {SEP}")
+        print("  Private plugins (explicitly protected – will never be touched):")
+        print(f"  {SEP}")
+        for p in sorted(explicitly_private):
             print(f"  {p}")
 
     print(f"\n  {SEP}")
@@ -650,6 +687,7 @@ def sync(
     quarantine_dir:   str,
     state_file:       str,
     previous_managed: set[str],
+    private_patterns: list[str],
     logger:           logging.Logger,
     dry_run:          bool,
 ) -> tuple[int, set[str]]:
@@ -731,6 +769,32 @@ def sync(
             )
             if not ok:
                 warnings += 1
+
+    # ------------------------------------------------------------------ #
+    # 3. Quarantine orphaned plugins (present locally, not in manifest,   #
+    #    not previously managed, not in private_patterns)                 #
+    # ------------------------------------------------------------------ #
+    logger.info("=== Phase 3: Quarantine orphaned plugins ===")
+    orphan_found = False
+    for root, _dirs, files in os.walk(local_plugins_dir):
+        for fname in files:
+            abs_path = os.path.join(root, fname)
+            rel = os.path.relpath(abs_path, local_plugins_dir).replace(os.sep, "/")
+            if rel in (STATE_FILENAME, LOG_FILENAME) or rel.endswith(".log"):
+                continue
+            if rel in current_manifest_paths:
+                continue   # handled by Phase 1
+            if rel in previous_managed:
+                continue   # handled by Phase 2
+            if is_private(rel, private_patterns):
+                logger.debug(f"  Private (skip): {rel}")
+                continue
+            orphan_found = True
+            ok = move_to_quarantine(abs_path, rel, quarantine_dir, logger, dry_run)
+            if not ok:
+                warnings += 1
+    if not orphan_found:
+        logger.info("  No orphaned plugins found.")
 
     logger.info("=== Sync complete ===")
     return warnings, current_manifest_paths
@@ -839,7 +903,7 @@ def init_config(config_path: str) -> int:
 
     # ---- Step 1: servoy_home ------------------------------------------- #
     print(SEP)
-    print(" Step 1/4 – Servoy installation folder (servoy_home)")
+    print(" Step 1/5 – Servoy installation folder (servoy_home)")
     print(SEP)
     print("  The root folder of your local Servoy installation.")
     print("  It must contain the sub-folder application_server/plugins.")
@@ -862,7 +926,7 @@ def init_config(config_path: str) -> int:
 
     # ---- Step 2: gold_root --------------------------------------------- #
     print(SEP)
-    print(" Step 2/4 – Gold Share root folder (gold_root)")
+    print(" Step 2/5 – Gold Share root folder (gold_root)")
     print(SEP)
     print("  The root of the shared folder maintained by the Gold Maintainer.")
     print("  Example: K:\\SERVOY_GOLD  or  \\\\server\\share\\SERVOY_GOLD")
@@ -883,7 +947,7 @@ def init_config(config_path: str) -> int:
 
     # ---- Step 3: servoy_version ---------------------------------------- #
     print(SEP)
-    print(" Step 3/4 – Servoy version (servoy_version)")
+    print(" Step 3/5 – Servoy version (servoy_version)")
     print(SEP)
     print("  Must match exactly what the Gold Maintainer uses in the share.")
     print("  Format: YYYY.M.P.BBBB  e.g. 2025.12.1.4123")
@@ -908,7 +972,7 @@ def init_config(config_path: str) -> int:
 
     # ---- Step 4: mode -------------------------------------------------- #
     print(SEP)
-    print(" Step 4/4 – Plugin removal mode (mode)")
+    print(" Step 4/5 – Plugin removal mode (mode)")
     print(SEP)
     print("  What should happen to managed plugins that are no longer in the manifest?")
     print("    quarantine  – move them to plugins__quarantine/YYYY-MM-DD/  (recommended)")
@@ -923,12 +987,35 @@ def init_config(config_path: str) -> int:
     )
     print()
 
+    # ---- Step 5: private_plugins --------------------------------------- #
+    print(SEP)
+    print(" Step 5/5 \u2013 Private plugin patterns (private_plugins)  [optional]")
+    print(SEP)
+    print("  Plugins matching these patterns will NEVER be touched by the sync,")
+    print("  even if they are not in the manifest. Useful for plugins you are")
+    print("  developing locally or that are specific to your machine.")
+    print()
+    print("  Enter fnmatch-style patterns, separated by commas.")
+    print("  Examples:  hvo-pdf.jar")
+    print("             my-team/*")
+    print("             dev-*.jar, drafts/*")
+    print("  Leave blank if you have no private plugins.")
+    print()
+
+    private_raw = _ask("  private_plugins (comma-separated)", default="", allow_empty=True)
+    if private_raw.strip():
+        private_plugins = [p.strip() for p in private_raw.split(",") if p.strip()]
+    else:
+        private_plugins = []
+    print()
+
     # ---- Summary + confirm --------------------------------------------- #
     cfg = {
         "gold_root":       gold_root_raw,
         "servoy_home":     servoy_home_raw,
         "servoy_version":  version,
         "mode":            mode,
+        "private_plugins": private_plugins,
     }
 
     print(SEP)
@@ -1106,6 +1193,7 @@ def main(argv: list[str] | None = None) -> int:
             quarantine_dir    = paths["quarantine_dir"],
             state_file        = paths["state_file"],
             previous_managed  = previous_managed,
+            private_patterns  = cfg.get("private_plugins", []),
             logger            = logger,
             dry_run           = args.dry_run,
         )
