@@ -42,12 +42,11 @@ jobs:
         run: python tools/clean_quarantine.py --help
 
       # ── --status with no config must exit 1, not crash with a traceback ───
+      # bash runs with -eo pipefail, so we capture the exit code via &&/||
+      # to prevent the step from failing before we can inspect the value.
       - name: plugins_sync --status (no config → controlled exit)
         shell: bash
         run: |
-          python tools/plugins_sync.py --status; code=$?
+          python tools/plugins_sync.py --status && code=0 || code=$?
           echo "Exit code: $code"
-          if [ "$code" -gt 1 ]; then
-            echo "Unexpected exit code $code (expected 0-1)"
-            exit 1
-          fi
+          test "$code" -le 1
