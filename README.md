@@ -81,49 +81,21 @@ C:\dev\servoy-gold-sync\
 
 ### Step 2 – Create your personal config file
 
-Copy the template:
+Run the interactive setup wizard:
 
-**Windows (CMD):**
+**Windows:**
 ```cmd
-copy "C:\dev\servoy-gold-sync\docs\example.servoy-plugin-sync.json" "%USERPROFILE%\.servoy-plugin-sync.json"
-notepad "%USERPROFILE%\.servoy-plugin-sync.json"
+python C:\dev\servoy-gold-sync\tools\plugins_sync.py --init-config
 ```
 
 **macOS / Linux:**
 ```bash
-cp ~/dev/servoy-gold-sync/docs/example.servoy-plugin-sync.json ~/.servoy-plugin-sync.json
-nano ~/.servoy-plugin-sync.json
+python3 ~/dev/servoy-gold-sync/tools/plugins_sync.py --init-config
 ```
 
-The file looks like this – **edit `servoy_home` to match your local Servoy installation**:
+The wizard will ask for your `gold_root`, `servoy_home`, and `mode` step by step, validate each path, auto-detect the installed Servoy version, and write the config to `~/.servoy-plugin-sync.json` (or `%USERPROFILE%\.servoy-plugin-sync.json` on Windows) automatically.
 
-```json
-{
-  "gold_root":      "K:\\SERVOY_GOLD\\",
-  "servoy_home":    "C:\\servoys\\2025.12.1.4123\\",
-  "servoy_version": "2025.12.1.4123",
-  "mode":           "quarantine"
-}
-```
-
-| Field | What to change |
-|---|---|
-| `gold_root` | Usually stays `K:\\SERVOY_GOLD\\`. Only change if your drive letter differs. |
-| `servoy_home` | **Your** local Servoy folder – the one that contains `developer\` and `application_server\`. |
-| `servoy_version` | Must match the version folder on the share. Ask the Gold Maintainer if unsure. |
-| `mode` | Leave as `quarantine` (safest option). |
-
-> **Tip – finding `servoy_home`:** Open your Servoy installation folder in Explorer / Finder. You're looking for the folder that contains both `developer` and `application_server` as direct subfolders. Use that full path.
-
-**macOS / Linux config example:**
-```json
-{
-  "gold_root":      "/Volumes/SERVOY_GOLD/",
-  "servoy_home":    "/Applications/Servoy/2025.12.1.4123/",
-  "servoy_version": "2025.12.1.4123",
-  "mode":           "quarantine"
-}
-```
+> **Tip:** If you already have a config and just want to change one value, re-run `--init-config` – it prefills defaults from the existing file.
 
 ---
 
