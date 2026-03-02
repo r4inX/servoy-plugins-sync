@@ -4,21 +4,32 @@ plugins_sync.py – Servoy Gold Plugin Sync Client
 Synchronises managed plugins from the Gold Share into the local Servoy
 plugins directory.  Private / unmanaged plugins are never touched.
 
-First-time setup:
+First-time setup (single instance):
     python plugins_sync.py --init-config
+
+First-time setup (multiple Servoy instances / named profiles):
+    python plugins_sync.py --init-config --profile stable
+    python plugins_sync.py --init-config --profile nightly
 
 Normal usage:
     python plugins_sync.py [--dry-run] [--verbose] [--config <path>]
-    python plugins_sync.py --status
+    python plugins_sync.py --profile stable
+    python plugins_sync.py --status [--profile nightly]
 
-Config file (default: %USERPROFILE%\\.servoy-plugin-sync.json):
+Launch Servoy (sync + start, with interactive profile picker if needed):
+    python plugins_sync.py --launch
+
+Single config (default: %USERPROFILE%\\.servoy-plugin-sync.json):
     {
         "gold_root":       "K:\\\\SERVOY_GOLD\\\\",
         "servoy_home":     "C:\\\\servoys\\\\2025.12.1.4123\\\\",
         "servoy_version":  "2025.12.1.4123",
-        "mode":            "quarantine",  // optional, default = quarantine
-        "private_plugins": ["hvo-pdf.jar", "my-team/*"]  // optional
+        "display_name":    "Stable",          // shown in profile picker
+        "mode":            "quarantine",      // optional, default = quarantine
+        "private_plugins": ["hvo-pdf.jar"]    // optional
     }
+
+Named profiles are stored in %USERPROFILE%\\.servoy-sync\\<name>.json.
 
 Exit codes:
     0  – fully successful
@@ -162,6 +173,256 @@ def resolve_paths(cfg: dict) -> dict:
             servoy_home, "application_server", "plugins", LOG_FILENAME
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Named profiles – discovery
+# ---------------------------------------------------------------------------
+
+PROFILES_DIR_NAME = ".servoy-sync"
+
+
+def profiles_dir() -> str:
+    """Return the path to the named-profiles directory (~/.servoy-sync/)."""
+    root = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.join(root, PROFILES_DIR_NAME)
+
+
+def _read_profile_meta(path: str, fallback_name: str) -> dict:
+    """Read display metadata from a config JSON without full validation."""
+    display = fallback_name
+    version = "?"
+    home    = "?"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        display = data.get("display_name", fallback_name)
+        version = data.get("servoy_version", "?")
+        home    = data.get("servoy_home", "?")
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {
+        "path":         path,
+        "name":         fallback_name,
+        "display_name": display,
+        "version":      version,
+        "servoy_home":  home,
+    }
+
+
+def discover_profiles() -> list[dict]:
+    """
+    Discover all available config profiles.
+
+    Searches:
+      1. Named profiles in ~/.servoy-sync/*.json  (filename without .json = name).
+      2. Legacy single config ~/.servoy-plugin-sync.json  (name = "default").
+
+    Each entry contains: path, name, display_name, version, servoy_home.
+    """
+    found: list[dict] = []
+
+    pdir = profiles_dir()
+    if os.path.isdir(pdir):
+        for entry in sorted(os.scandir(pdir), key=lambda e: e.name):
+            if entry.name.endswith(".json") and entry.is_file():
+                name = entry.name[:-5]
+                found.append(_read_profile_meta(entry.path, name))
+
+    legacy = default_config_path()
+    if os.path.isfile(legacy) and not any(p["path"] == legacy for p in found):
+        found.append(_read_profile_meta(legacy, "default"))
+
+    return found
+
+
+# ---------------------------------------------------------------------------
+# Interactive profile picker
+# ---------------------------------------------------------------------------
+
+def _enable_ansi_windows() -> bool:
+    """Enable ANSI/VT processing on the Windows console. Returns True on success."""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32        # type: ignore[attr-defined]
+        ENABLE_VTP = 0x0004
+        mode = ctypes.c_ulong()
+        h = kernel32.GetStdHandle(-12)           # STD_ERROR_HANDLE
+        kernel32.GetConsoleMode(h, ctypes.byref(mode))
+        kernel32.SetConsoleMode(h, mode.value | ENABLE_VTP)
+        return True
+    except Exception:
+        return False
+
+
+def _ansi_supported() -> bool:
+    """Return True if stderr supports ANSI escape sequences."""
+    if not sys.stderr.isatty():
+        return False
+    if sys.platform == "win32":
+        return _enable_ansi_windows()
+    return True
+
+
+def _render_picker(profiles: list[dict], selected: int, first: bool) -> None:
+    """Draw (or redraw in-place) the profile picker on stderr."""
+    n        = len(profiles)
+    SEP      = "\u2500" * 64
+    col_name = 20
+    col_ver  = 20
+
+    if not first:
+        sys.stderr.write(f"\033[{n + 4}A\033[J")
+
+    sys.stderr.write(f"  {SEP}\n")
+    sys.stderr.write("  Which Servoy would you like to start?\n")
+    sys.stderr.write("  Use \u2191\u2193 arrows, Enter to confirm, Ctrl+C to abort.\n")
+    sys.stderr.write(f"  {SEP}\n")
+
+    for i, p in enumerate(profiles):
+        marker    = "\u25b6 " if i == selected else "  "
+        name      = p["display_name"][:col_name]
+        version   = p["version"][:col_ver]
+        home      = p["servoy_home"]
+        home_s    = home if len(home) <= 28 else "\u2026" + home[-27:]
+        sys.stderr.write(f"  {marker}{name:<{col_name}} {version:<{col_ver}} {home_s}\n")
+
+    sys.stderr.write(f"  {SEP}\n")
+    sys.stderr.flush()
+
+
+def _pick_interactive(profiles: list[dict]) -> "dict | None":
+    """Arrow-key driven picker; UI on stderr. Returns chosen profile or None."""
+    n        = len(profiles)
+    selected = 0
+    _render_picker(profiles, selected, first=True)
+
+    if sys.platform == "win32":
+        import msvcrt
+        while True:
+            ch = msvcrt.getwch()
+            if ch in ("\r", "\n"):
+                break
+            if ch in ("\x00", "\xe0"):      # prefix for special keys
+                ch2 = msvcrt.getwch()
+                if ch2 == "H":              # up arrow
+                    selected = (selected - 1) % n
+                elif ch2 == "P":            # down arrow
+                    selected = (selected + 1) % n
+                _render_picker(profiles, selected, first=False)
+            elif ch == "\x03":              # Ctrl+C
+                sys.stderr.write("\n  Aborted.\n")
+                return None
+    else:
+        import tty, termios
+        fd  = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            while True:
+                ch = sys.stdin.read(1)
+                if ch in ("\r", "\n"):
+                    break
+                if ch == "\x03":
+                    sys.stderr.write("\n  Aborted.\n")
+                    return None
+                if ch == "\x1b":
+                    ch2 = sys.stdin.read(1)
+                    if ch2 == "[":
+                        ch3 = sys.stdin.read(1)
+                        if ch3 == "A":
+                            selected = (selected - 1) % n
+                        elif ch3 == "B":
+                            selected = (selected + 1) % n
+                        _render_picker(profiles, selected, first=False)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    sys.stderr.write("\n")
+    return profiles[selected]
+
+
+def _pick_fallback(profiles: list[dict]) -> "dict | None":
+    """Numbered-list picker; fallback for non-TTY / no-ANSI terminals."""
+    SEP = "-" * 62
+    sys.stderr.write(f"\n  {SEP}\n")
+    sys.stderr.write("  Which Servoy would you like to start?\n")
+    sys.stderr.write(f"  {SEP}\n")
+    for i, p in enumerate(profiles, 1):
+        sys.stderr.write(
+            f"  [{i}] {p['display_name']:<20} {p['version']:<20} {p['servoy_home']}\n"
+        )
+    sys.stderr.write(f"  {SEP}\n")
+    while True:
+        try:
+            raw = input("  Enter number: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            sys.stderr.write("\n  Aborted.\n")
+            return None
+        if raw.isdigit() and 1 <= int(raw) <= len(profiles):
+            return profiles[int(raw) - 1]
+        sys.stderr.write(f"  Please enter a number between 1 and {len(profiles)}.\n")
+
+
+def pick_profile(profiles: list[dict]) -> "dict | None":
+    """Show interactive profile picker. Returns chosen profile or None if aborted."""
+    if _ansi_supported():
+        return _pick_interactive(profiles)
+    return _pick_fallback(profiles)
+
+
+# ---------------------------------------------------------------------------
+# Servoy launcher
+# ---------------------------------------------------------------------------
+
+def launch_servoy(servoy_home: str, logger: logging.Logger) -> int:
+    """
+    Launch the Servoy Developer executable for *servoy_home*.
+
+    Windows : <servoy_home>/developer/servoy.exe   (detached process)
+    macOS   : open -a <servoy_home>/Servoy Developer.app  or binary
+    Linux   : <servoy_home>/developer/Servoy        (new session)
+
+    Returns 0 on success, 1 on failure.
+    """
+    import subprocess
+
+    home = os.path.abspath(servoy_home)
+
+    if sys.platform == "win32":
+        exe = os.path.join(home, "developer", "servoy.exe")
+        if not os.path.isfile(exe):
+            logger.error(f"servoy.exe not found: {exe}\n  Check 'servoy_home' in your config.")
+            return 1
+        logger.info(f"Launching Servoy: {exe}")
+        subprocess.Popen(
+            [exe],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
+
+    elif sys.platform == "darwin":
+        app = os.path.join(home, "Servoy Developer.app")
+        if os.path.exists(app):
+            logger.info(f"Launching: open -a '{app}'")
+            subprocess.Popen(["open", "-a", app])
+        else:
+            binary = os.path.join(home, "developer", "Servoy")
+            if not os.path.isfile(binary):
+                logger.error(f"Servoy binary not found at '{binary}' or '{app}'")
+                return 1
+            logger.info(f"Launching: {binary}")
+            subprocess.Popen([binary], start_new_session=True, close_fds=True)
+
+    else:   # Linux / other
+        binary = os.path.join(home, "developer", "Servoy")
+        if not os.path.isfile(binary):
+            logger.error(f"Servoy binary not found: {binary}")
+            return 1
+        logger.info(f"Launching: {binary}")
+        subprocess.Popen([binary], start_new_session=True, close_fds=True)
+
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -873,10 +1134,12 @@ def _validate_servoy_version(version: str) -> str | None:
     return None
 
 
-def init_config(config_path: str) -> int:
+def init_config(config_path_override: str | None) -> int:
     """
-    Interactive wizard that creates (or overwrites) the user config file.
-    Returns an exit code (0 = success, 1 = aborted / error).
+    Interactive wizard that creates (or overwrites) a config file.
+    If *config_path_override* is None the wizard first asks for a profile
+    name to determine where to write; otherwise it writes to the given path.
+    Returns 0 on success, 1 on aborted / error.
     """
     SEP = "-" * 60
 
@@ -884,10 +1147,31 @@ def init_config(config_path: str) -> int:
     print("=" * 60)
     print(" Servoy Gold Plugin Sync – Config Setup Wizard")
     print("=" * 60)
+    print()
+
+    # ---- Determine target file ----------------------------------------- #
+    if config_path_override:
+        config_path = config_path_override
+    else:
+        print(SEP)
+        print(" Profile name  (determines where the config is stored)")
+        print(SEP)
+        print("  Single Servoy installation  →  leave blank")
+        print("  Multiple installations       →  enter a short name (e.g. stable, nightly)")
+        print("  Named configs are stored in: " + profiles_dir())
+        print()
+        raw_profile = _ask("  Profile name", default="", allow_empty=True).strip()
+        print()
+        if raw_profile:
+            config_path = os.path.join(profiles_dir(), raw_profile + ".json")
+        else:
+            config_path = default_config_path()
+
     print(f"  Target file: {config_path}")
     print()
 
-    # ---- Check for existing config ------------------------------------- #
+    # ---- Load existing values as defaults ------------------------------ #
+    existing: dict = {}
     if os.path.isfile(config_path):
         print(f"  A config file already exists at:")
         print(f"  {config_path}")
@@ -899,11 +1183,29 @@ def init_config(config_path: str) -> int:
         if answer not in ("y", "yes"):
             print("  Keeping existing config. Nothing changed.")
             return 0
+        try:
+            with open(config_path, "r", encoding="utf-8") as _f:
+                existing = json.load(_f)
+        except (OSError, json.JSONDecodeError):
+            existing = {}
         print()
 
-    # ---- Step 1: servoy_home ------------------------------------------- #
+    TOTAL = 6
+
+    # ---- Step 1: display_name (optional) ------------------------------- #
     print(SEP)
-    print(" Step 1/5 – Servoy installation folder (servoy_home)")
+    print(f" Step 1/{TOTAL} – Display name (display_name)  [optional]")
+    print(SEP)
+    print("  A short label shown in the profile picker, e.g. 'Stable', 'Nightly'.")
+    print("  Leave blank to use the profile name (or filename) as label.")
+    print()
+    default_dn = existing.get("display_name", "")
+    display_name_raw = _ask("  display_name", default=default_dn or None, allow_empty=True).strip()
+    print()
+
+    # ---- Step 2: servoy_home ------------------------------------------- #
+    print(SEP)
+    print(f" Step 2/{TOTAL} – Servoy installation folder (servoy_home)")
     print(SEP)
     print("  The root folder of your local Servoy installation.")
     print("  It must contain the sub-folder application_server/plugins.")
@@ -912,6 +1214,7 @@ def init_config(config_path: str) -> int:
 
     servoy_home_raw = _ask(
         "  servoy_home",
+        default=existing.get("servoy_home") or None,
         validator=lambda p: _validate_servoy_home(os.path.expandvars(p)),
     )
     servoy_home = os.path.expandvars(servoy_home_raw)
@@ -924,9 +1227,9 @@ def init_config(config_path: str) -> int:
         print("  ⚠  Could not auto-detect the Servoy version from this folder.")
     print()
 
-    # ---- Step 2: gold_root --------------------------------------------- #
+    # ---- Step 3: gold_root --------------------------------------------- #
     print(SEP)
-    print(" Step 2/5 – Gold Share root folder (gold_root)")
+    print(f" Step 3/{TOTAL} – Gold Share root folder (gold_root)")
     print(SEP)
     print("  The root of the shared folder maintained by the Gold Maintainer.")
     print("  Example: K:\\SERVOY_GOLD  or  \\\\server\\share\\SERVOY_GOLD")
@@ -934,6 +1237,7 @@ def init_config(config_path: str) -> int:
 
     gold_root_raw = _ask(
         "  gold_root",
+        default=existing.get("gold_root") or None,
         validator=lambda p: _validate_gold_root(os.path.expandvars(p)),
     )
     gold_root = os.path.expandvars(gold_root_raw)
@@ -945,9 +1249,9 @@ def init_config(config_path: str) -> int:
         print( "     This is expected if the Gold Maintainer hasn't set it up yet.")
     print()
 
-    # ---- Step 3: servoy_version ---------------------------------------- #
+    # ---- Step 4: servoy_version ---------------------------------------- #
     print(SEP)
-    print(" Step 3/5 – Servoy version (servoy_version)")
+    print(f" Step 4/{TOTAL} – Servoy version (servoy_version)")
     print(SEP)
     print("  Must match exactly what the Gold Maintainer uses in the share.")
     print("  Format: YYYY.M.P.BBBB  e.g. 2025.12.1.4123")
@@ -970,9 +1274,9 @@ def init_config(config_path: str) -> int:
         print( "     This may be OK if the share isn't set up yet, or you're offline.")
     print()
 
-    # ---- Step 4: mode -------------------------------------------------- #
+    # ---- Step 5: mode -------------------------------------------------- #
     print(SEP)
-    print(" Step 4/5 – Plugin removal mode (mode)")
+    print(f" Step 5/{TOTAL} – Plugin removal mode (mode)")
     print(SEP)
     print("  What should happen to managed plugins that are no longer in the manifest?")
     print("    quarantine  – move them to plugins__quarantine/YYYY-MM-DD/  (recommended)")
@@ -987,9 +1291,9 @@ def init_config(config_path: str) -> int:
     )
     print()
 
-    # ---- Step 5: private_plugins --------------------------------------- #
+    # ---- Step 6: private_plugins --------------------------------------- #
     print(SEP)
-    print(" Step 5/5 \u2013 Private plugin patterns (private_plugins)  [optional]")
+    print(f" Step 6/{TOTAL} \u2013 Private plugin patterns (private_plugins)  [optional]")
     print(SEP)
     print("  Plugins matching these patterns will NEVER be touched by the sync,")
     print("  even if they are not in the manifest. Useful for plugins you are")
@@ -1002,7 +1306,13 @@ def init_config(config_path: str) -> int:
     print("  Leave blank if you have no private plugins.")
     print()
 
-    private_raw = _ask("  private_plugins (comma-separated)", default="", allow_empty=True)
+    existing_private = existing.get("private_plugins", [])
+    default_private  = ", ".join(existing_private) if existing_private else ""
+    private_raw = _ask(
+        "  private_plugins (comma-separated)",
+        default=default_private or None,
+        allow_empty=True,
+    )
     if private_raw.strip():
         private_plugins = [p.strip() for p in private_raw.split(",") if p.strip()]
     else:
@@ -1010,13 +1320,15 @@ def init_config(config_path: str) -> int:
     print()
 
     # ---- Summary + confirm --------------------------------------------- #
-    cfg = {
+    cfg: dict = {
         "gold_root":       gold_root_raw,
         "servoy_home":     servoy_home_raw,
         "servoy_version":  version,
         "mode":            mode,
         "private_plugins": private_plugins,
     }
+    if display_name_raw:
+        cfg["display_name"] = display_name_raw
 
     print(SEP)
     print(" Summary – config to be written:")
@@ -1060,7 +1372,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         epilog="""
 Examples:
   python plugins_sync.py --init-config
+  python plugins_sync.py --init-config --profile nightly
   python plugins_sync.py
+  python plugins_sync.py --profile stable
+  python plugins_sync.py --launch
   python plugins_sync.py --status
   python plugins_sync.py --dry-run --verbose
   python plugins_sync.py --config "D:\\myconfig.json"
@@ -1073,6 +1388,15 @@ Examples:
         help=(
             "Path to the user config JSON. "
             f"Default: %%USERPROFILE%%\\{CONFIG_FILENAME}"
+        ),
+    )
+    parser.add_argument(
+        "--profile",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Named profile to use. Loads ~/.servoy-sync/<NAME>.json. "
+            "Shorthand for --config ~/.servoy-sync/<NAME>.json."
         ),
     )
     parser.add_argument(
@@ -1095,12 +1419,21 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--launch",
+        action="store_true",
+        help=(
+            "Run sync then launch Servoy Developer. If multiple profiles exist "
+            "an interactive picker is shown. Used by start-servoy.cmd / .sh."
+        ),
+    )
+    parser.add_argument(
         "--init-config",
         action="store_true",
         help=(
-            "Interactive wizard: asks for servoy_home, gold_root, version, mode, "
-            "validates each answer, and writes the config file. "
-            "Use --config to specify a non-default target path."
+            "Interactive wizard: creates or updates a config file. "
+            "Prompts for profile name (to support multiple Servoy instances), "
+            "display_name, servoy_home, gold_root, version, mode, and private_plugins. "
+            "Combine with --config PATH or --profile NAME to target a specific file."
         ),
     )
     return parser.parse_args(argv)
@@ -1109,9 +1442,41 @@ Examples:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    config_path = args.config or default_config_path()
+    # ---- --init-config: run wizard and exit (no logging needed yet) ----- #
+    if args.init_config:
+        # Explicit --config wins; --profile is shorthand; neither = ask in wizard
+        if args.config:
+            return init_config(args.config)
+        if args.profile:
+            return init_config(os.path.join(profiles_dir(), args.profile + ".json"))
+        return init_config(None)
 
-    # Bootstrap logger with a temporary stderr handler until we know the log path
+    # ---- Resolve config path -------------------------------------------- #
+    if args.profile:
+        config_path = os.path.join(profiles_dir(), args.profile + ".json")
+    elif args.config:
+        config_path = args.config
+    elif args.launch:
+        # Profile selection: discover all profiles; ask if more than one
+        discovered = discover_profiles()
+        if not discovered:
+            print(
+                "No config profiles found.\n"
+                "  Run: python plugins_sync.py --init-config",
+                file=sys.stderr,
+            )
+            return 1
+        if len(discovered) == 1:
+            config_path = discovered[0]["path"]
+        else:
+            chosen = pick_profile(discovered)
+            if chosen is None:
+                return 1
+            config_path = chosen["path"]
+    else:
+        config_path = default_config_path()
+
+    # Bootstrap logger with a temporary handler until we know the log path
     bootstrap_logger = logging.getLogger("plugins_sync")
     if not bootstrap_logger.handlers:
         bootstrap_logger.setLevel(logging.DEBUG)
@@ -1123,10 +1488,6 @@ def main(argv: list[str] | None = None) -> int:
         bootstrap_logger.addHandler(_bch)
 
     logger = bootstrap_logger
-
-    # ---- --init-config: run wizard and exit ----------------------------- #
-    if args.init_config:
-        return init_config(config_path)
 
     if args.dry_run:
         logger.info("*** DRY-RUN mode – no changes will be made ***")
@@ -1206,14 +1567,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Summary ---------------------------------------------------------- #
     if warnings == 0:
-        logger.info(f"Result: SUCCESS (0 warnings)")
-        return 0
+        logger.info("Result: SUCCESS (0 warnings)")
+        exit_code = 0
     else:
         logger.warning(
             f"Result: COMPLETED WITH {warnings} WARNING(S) — "
             f"check log: {paths['log_file']}"
         )
-        return 2
+        exit_code = 2
+
+    # --- Launch Servoy if --launch --------------------------------------- #
+    if args.launch:
+        launch_result = launch_servoy(cfg["servoy_home"], logger)
+        if launch_result != 0 and exit_code == 0:
+            exit_code = launch_result
+
+    return exit_code
 
 
 if __name__ == "__main__":

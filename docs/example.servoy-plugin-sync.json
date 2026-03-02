@@ -1,6 +1,8 @@
 {
-  "gold_root": "K:\\SERVOY_GOLD\\",
-  "servoy_home": "C:\\servoys\\2025.12.1.4123\\",
-  "servoy_version": "2025.12.1.4123",
-  "mode": "quarantine"
+  "gold_root":       "K:\\SERVOY_GOLD\\",
+  "servoy_home":     "C:\\servoys\\2025.12.1.4123\\",
+  "servoy_version":  "2025.12.1.4123",
+  "display_name":    "Stable",
+  "mode":            "quarantine",
+  "private_plugins": []
 }

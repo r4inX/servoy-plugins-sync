@@ -93,9 +93,42 @@ python C:\dev\servoy-gold-sync\tools\plugins_sync.py --init-config
 python3 ~/dev/servoy-gold-sync/tools/plugins_sync.py --init-config
 ```
 
-The wizard will ask for your `gold_root`, `servoy_home`, and `mode` step by step, validate each path, auto-detect the installed Servoy version, and write the config to `~/.servoy-plugin-sync.json` (or `%USERPROFILE%\.servoy-plugin-sync.json` on Windows) automatically.
+The wizard walks you through 6 steps: display name, `servoy_home`, `gold_root`, `servoy_version`, `mode`, and optional `private_plugins` patterns. It validates each path, auto-detects the Servoy version, and writes the config automatically.
 
-> **Tip:** If you already have a config and just want to change one value, re-run `--init-config` – it prefills defaults from the existing file.
+> **Tip:** Re-running `--init-config` on an existing config pre-fills all current values as defaults – useful to change a single field.
+
+#### Multiple Servoy installations
+
+If you have more than one Servoy version installed (stable, nightly, legacy, …), create a **named profile** for each:
+
+```cmd
+python ... plugins_sync.py --init-config --profile stable
+python ... plugins_sync.py --init-config --profile nightly
+```
+
+Each profile is stored as `%USERPROFILE%\.servoy-sync\<name>.json`. When you launch Servoy via `start-servoy.cmd` and multiple profiles exist, an **interactive picker** is shown:
+
+```
+  ────────────────────────────────────────────────────────────────
+  Which Servoy would you like to start?
+  Use ↑↓ arrows, Enter to confirm, Ctrl+C to abort.
+  ────────────────────────────────────────────────────────────────
+  ▶ stable    2025.12.1.4123       C:\Servoys\2025.12\
+    nightly   2026.03.0.0001       C:\Servoys\nightly\
+  ────────────────────────────────────────────────────────────────
+```
+
+#### Private plugins
+
+Plugins not listed in the Gold Share manifest are automatically **quarantined** on the next sync — unless you mark them as private in your config:
+
+```json
+{
+  "private_plugins": ["hvo-pdf.jar", "drafts/*"]
+}
+```
+
+Patterns use `fnmatch` syntax: `*` matches anything, `?` matches one character, `dir/*` matches all files under `dir/`. Private plugins are never touched by the sync.
 
 ---
 
@@ -125,8 +158,18 @@ Then create an alias or a launcher pointing to `start-servoy.sh`.
 
 From now on:
 1. Open Servoy via `start-servoy.cmd` (Windows) or `start-servoy.sh` (macOS/Linux).
-2. The sync runs automatically and prints what it did.
-3. If the sync fails for any reason (share offline, file locked), **Servoy still starts** – you just see a warning.
+2. If you have multiple profiles, pick the one you want with the arrow keys.
+3. The sync runs automatically and prints what it did.
+4. If the sync fails for any reason (share offline, file locked), you will see a warning. Servoy **still starts**.
+
+You can also sync or launch directly:
+```cmd
+rem Sync only (no Servoy start)
+python tools/plugins_sync.py --profile stable
+
+rem Sync + launch (same as the start script)
+python tools/plugins_sync.py --launch
+```
 
 ---
 
@@ -175,12 +218,14 @@ Tell the team what changed (Slack/Teams message is fine). Each developer will pi
 
 | Problem | Solution |
 |---|---|
-| `Config file not found` | Create `~/.servoy-plugin-sync.json` (Step 2 above) |
+| `No config profiles found` | Run `python plugins_sync.py --init-config` to create your first profile |
+| `Config file not found` | Run `python plugins_sync.py --init-config` |
 | `Gold Share root is not accessible` | Map `K:\` in Windows Explorer; on macOS/Linux mount the share |
 | `Python 3 not found` | Install Python 3 and add it to PATH |
 | `Sync finished with issues (exit code: 2)` | Check the log at `<servoy_home>\application_server\plugins\gold_plugins_sync.log` |
 | File locked / permission error | Close Servoy fully, then run the launcher again |
 | Wrong plugins after update | Check `servoy_version` in your config matches the current version |
+| Private plugin got quarantined | Add it to `private_plugins` in your config: `["myplugin.jar"]` |
 
 ### Check sync status without running a sync
 
