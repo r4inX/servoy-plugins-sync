@@ -1474,7 +1474,23 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             config_path = chosen["path"]
     else:
-        config_path = default_config_path()
+        # Default: use legacy single-file path; but if it doesn't exist and
+        # named profiles are available, apply the same discovery logic so that
+        # plain invocations like --status or a bare sync Just Work.
+        default = default_config_path()
+        if os.path.isfile(default):
+            config_path = default
+        else:
+            discovered = discover_profiles()
+            if not discovered:
+                config_path = default   # will fail in load_config with a clear message
+            elif len(discovered) == 1:
+                config_path = discovered[0]["path"]
+            else:
+                chosen = pick_profile(discovered)
+                if chosen is None:
+                    return 1
+                config_path = chosen["path"]
 
     # Bootstrap logger with a temporary handler until we know the log path
     bootstrap_logger = logging.getLogger("plugins_sync")
