@@ -400,6 +400,7 @@ def launch_servoy(servoy_home: str, logger: logging.Logger) -> int:
         logger.info(f"Launching Servoy: {exe}")
         subprocess.Popen(
             [exe],
+            cwd=home,
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
         )
@@ -408,14 +409,14 @@ def launch_servoy(servoy_home: str, logger: logging.Logger) -> int:
         app = os.path.join(home, "Servoy Developer.app")
         if os.path.exists(app):
             logger.info(f"Launching: open -a '{app}'")
-            subprocess.Popen(["open", "-a", app])
+            subprocess.Popen(["open", "-a", app], cwd=home)
         else:
             binary = os.path.join(home, "developer", "Servoy")
             if not os.path.isfile(binary):
                 logger.error(f"Servoy binary not found at '{binary}' or '{app}'")
                 return 1
             logger.info(f"Launching: {binary}")
-            subprocess.Popen([binary], start_new_session=True, close_fds=True)
+            subprocess.Popen([binary], cwd=home, start_new_session=True, close_fds=True)
 
     else:   # Linux / other
         binary = os.path.join(home, "developer", "Servoy")
@@ -423,7 +424,7 @@ def launch_servoy(servoy_home: str, logger: logging.Logger) -> int:
             logger.error(f"Servoy binary not found: {binary}")
             return 1
         logger.info(f"Launching: {binary}")
-        subprocess.Popen([binary], start_new_session=True, close_fds=True)
+        subprocess.Popen([binary], cwd=home, start_new_session=True, close_fds=True)
 
     return 0
 
