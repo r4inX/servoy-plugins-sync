@@ -13,8 +13,8 @@ errors **do not block the launch**, they are only shown as a warning.
 ## Prerequisites
 
 - Windows
-- Python 3 installed (accessible on PATH as `python` or `py`)
-- Local config `%USERPROFILE%\.servoy-plugin-sync.json` exists
+- Python 3.10+ installed (accessible on PATH as `python` or `py`)
+- At least one config profile created via `python plugins_sync.py --init-config`
   (see [docs_plugins_sync.md](docs_plugins_sync.md))
 - `plugins_sync.py` is in the same folder as `start-servoy.cmd`
 
@@ -37,63 +37,55 @@ The script performs all steps automatically — no additional parameters require
 ```
 start-servoy.cmd
     │
-    ├─ 1. Read config  (%USERPROFILE%\.servoy-plugin-sync.json)
-    │       └─ via PowerShell: extract servoy_home
+    ├─ 1. Find Python  (python → py -3 → error)
     │
-    ├─ 2. Find Python
-    │       ├─ python  (on PATH?)
-    │       ├─ py -3   (Python Launcher?)
-    │       └─ neither → warning, skip sync
-    │
-    ├─ 3. Run plugins_sync.py
-    │       ├─ Exit 0  → "Sync completed successfully"
-    │       └─ Exit ≠ 0 → warning + exit code + log path shown
-    │
-    └─ 4. Launch Servoy
-            ├─ servoy.exe found → start "" "<path>\developer\servoy.exe"
-            └─ not found → error message + exit /b 1
+    └─ 2. Run plugins_sync.py --launch
+            │
+            ├─ Auto-discover profiles
+            │       ├─ 1 profile  → use it directly
+            │       ├─ several   → arrow-key picker shown
+            │       └─ none      → error message + exit 1
+            │
+            ├─ Sync Gold plugins
+            │       ├─ Share reachable  → install / update / quarantine
+            │       └─ Share offline    → warning, sync skipped
+            │
+            └─ Launch Servoy (servoy.exe, cwd = servoy_home)
+                    └─ Exit non-zero: [WARNING] in CMD window + pause
 ```
 
 ---
 
-## Example output (all OK)
+## Example output (single profile, all OK)
 
 ```
-============================================================
- Servoy Gold Plugin Sync – Wrapper
-============================================================
- servoy_home : C:\servoys\2025.12.1.4123
- sync script : C:\dev\servoy-gold-sync\tools\plugins_sync.py
-
-[INFO] Running plugin sync...
-2026-03-02 08:00:01  INFO      ...
+2026-03-02 08:00:01  INFO      Config: C:\Users\max\.servoy-sync\stable.json
+2026-03-02 08:00:01  INFO      Gold manifest: K:\SERVOY_GOLD\plugins\servoy-2025.12.1.4123\manifest.json
+2026-03-02 08:00:02  INFO      === Phase 1: Install / Update managed plugins ===
+2026-03-02 08:00:02  INFO        Nothing to install or update.
+2026-03-02 08:00:02  INFO      === Phase 2: Quarantine removed managed plugins ===
+2026-03-02 08:00:02  INFO        Nothing to quarantine.
 2026-03-02 08:00:02  INFO      Result: SUCCESS (0 warnings)
-[INFO] Plugin sync completed successfully.
-
-[INFO] Launching: C:\servoys\2025.12.1.4123\developer\servoy.exe
+2026-03-02 08:00:02  INFO      Launching Servoy: C:\servoys\2025.12.1.4123\developer\servoy.exe
 ```
 
-## Example output (sync errors, Servoy launches anyway)
+## Example output (multiple profiles – picker shown)
 
 ```
-[WARNING] Plugin sync finished with issues (exit code: 2).
-          Some plugins may not be up to date.
-          Check the log for details:
-          C:\servoys\2025.12.1.4123\application_server\plugins\gold_plugins_sync.log
-          Starting Servoy anyway...
-
-[INFO] Launching: C:\servoys\2025.12.1.4123\developer\servoy.exe
+  ────────────────────────────────────────────────────────────────
+  Which Servoy would you like to start?
+  Use ↑↓ arrows, Enter to confirm, Ctrl+C to abort.
+  ────────────────────────────────────────────────────────────────
+  ▶ stable    Stable 2025.12     C:\servoys\2025.12.1.4123\
+    nightly   Nightly 2026.03    C:\servoys\2026.03.0.5000\
+  ────────────────────────────────────────────────────────────────
 ```
 
-## Example output (Python not found)
+## Example output (Gold Share offline, Servoy launches anyway)
 
 ```
-[WARNING] Python 3 was not found on PATH.
-          Please install Python 3 or add it to PATH.
-          Plugin sync will be SKIPPED.
-          Starting Servoy anyway...
-
-[INFO] Launching: C:\servoys\2025.12.1.4123\developer\servoy.exe
+2026-03-02 08:00:01  WARNING   Gold Share is unavailable – skipping sync and launching Servoy anyway.
+2026-03-02 08:00:01  INFO      Launching Servoy: C:\servoys\2025.12.1.4123\developer\servoy.exe
 ```
 
 ---
@@ -102,19 +94,22 @@ start-servoy.cmd
 
 | Situation | Behaviour |
 |---|---|
-| Config file missing | Warning + sync skip + Servoy launches |
-| `servoy_home` not in config | Warning + sync skip + Servoy launches |
-| Python not on PATH | Warning + sync skip + Servoy launches |
-| `plugins_sync.py` not found | Warning + sync skip + Servoy launches |
-| Sync exit code 2 (warnings) | Warning with log path + Servoy launches |
-| `servoy.exe` not found | Error message + `pause` + exit code 1 |
+| Python not on PATH | Error message + `pause` + exit code 1 |
+| `plugins_sync.py` not found | Error message + `pause` + exit code 1 |
+| No profiles configured | plugins_sync.py exits with code 1 → CMD shows `[WARNING]` + pause |
+| Gold Share offline | Sync skipped with warning; Servoy still launches (exit code 2, no pause) |
+| Sync exit code 2 (warnings) | CMD shows `[WARNING]` + pause with log hint |
+| `servoy.exe` not found | plugins_sync.py logs error, exits 1 → CMD shows `[WARNING]` + pause |
 
 ---
 
 ## One-time setup per developer
 
-1. Create the config (if not done yet): `%USERPROFILE%\.servoy-plugin-sync.json`
-   (or run `python plugins_sync.py --init-config`)
+1. Create your profile (if not done yet):
+   ```cmd
+   python plugins_sync.py --init-config
+   ```
+   For multiple Servoy installations, run `--init-config --profile <name>` for each.
 2. Create a **shortcut** to `start-servoy.cmd` on the Desktop or Taskbar.
 3. Replace all existing shortcuts to `servoy.exe`.
 
@@ -132,10 +127,9 @@ $lnk.Save()
 
 ## Notes
 
-- Servoy is launched with `start "" "…\servoy.exe"` — the CMD window closes
-  immediately afterwards. To read the sync output, run `start-servoy.cmd` from
-  an already-open CMD window.
-- The wrapper always reads `servoy_home` **fresh** from the config — no
-  hardcoding required.
-- After a Servoy version update: only change `servoy_version` (and optionally
-  `servoy_home`) in the config.
+- The script delegates **all** logic (profile discovery, sync, launch) to
+  `plugins_sync.py --launch` — no config reading happens in the CMD script itself.
+- Servoy is started with `cwd` set to `servoy_home`, so runtime folders
+  (`reports/`, `tmp/`, `www/`) are created inside the Servoy installation tree,
+  not in the `tools/` directory.
+- After a Servoy version update: update your profile via `--init-config --profile <name>`.

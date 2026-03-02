@@ -38,11 +38,24 @@ python plugins_sync.py --init-config
 ```
 
 The wizard:
-1. Asks for `servoy_home` and checks that the path exists and looks like a Servoy installation
-2. Asks for `gold_root` and checks that the share is accessible
-3. Asks for `servoy_version` — suggests the automatically detected version
-4. Asks for `mode` (default: `quarantine`)
-5. Shows a summary and asks for confirmation before writing
+1. Asks for a **profile name** — used as the config file name under `~/.servoy-sync/<name>.json`
+2. Asks for a **display name** (shown in the profile picker)
+3. Asks for `servoy_home` and checks that the path exists and looks like a Servoy installation
+4. Asks for `gold_root` and checks that the share is accessible
+5. Asks for `servoy_version` — suggests the automatically detected version
+6. Asks for `mode` (default: `quarantine`) and optional `private_plugins` patterns
+7. Shows a summary and asks for confirmation before writing
+
+**Multiple profiles** (e.g. stable + nightly):
+
+```cmd
+python plugins_sync.py --init-config --profile stable
+python plugins_sync.py --init-config --profile nightly
+```
+
+Each profile is saved as `%USERPROFILE%\.servoy-sync\<name>.json`. When you run
+`--launch` (or `start-servoy.cmd`) and multiple profiles exist, an arrow-key
+picker is shown so you choose which Servoy to start.
 
 Afterwards run a status check to verify the setup:
 
@@ -81,10 +94,12 @@ File contents (template):
 
 | Field | Required | What to enter |
 |---|---|---|
+| `display_name` | No | Human-readable label shown in the profile picker (e.g. `"Stable 2025.12"`). Falls back to the profile filename if omitted. |
 | `gold_root` | Yes | Path to the mapped Gold Share. Typically `K:\\SERVOY_GOLD\\` for all Windows developers — only change if your drive letter differs. |
 | `servoy_home` | **Yes, individual** | Your local Servoy installation directory. Must contain `developer\` and `application_server\`. Examples: `C:\\servoys\\2025.12.1.4123\\` or `C:\\Program Files\\Servoy\\`. |
 | `servoy_version` | Yes | Must match exactly the folder name on the share (`servoy-<version>`). Update this when upgrading Servoy. |
 | `mode` | No | `quarantine` (default, recommended) — removed managed plugins are moved, not deleted. |
+| `private_plugins` | No | List of fnmatch patterns for plugins to **never** touch, even if orphaned. E.g. `["hvo-pdf.jar", "drafts/*"]`. |
 
 > **Tip – finding servoy_home:** Open Windows Explorer and navigate to your Servoy
 > installation. The folder you want contains two sub-folders: `developer` and
@@ -96,30 +111,50 @@ File contents (template):
 **Developer 1 – default path:**
 ```json
 {
+  "display_name":   "Stable 2025.12",
   "gold_root":      "K:\\SERVOY_GOLD\\",
   "servoy_home":    "C:\\servoys\\2025.12.1.4123\\",
   "servoy_version": "2025.12.1.4123",
-  "mode":           "quarantine"
+  "mode":           "quarantine",
+  "private_plugins": []
 }
 ```
 
 **Developer 2 – Servoy under Program Files:**
 ```json
 {
+  "display_name":   "Stable 2025.12",
   "gold_root":      "K:\\SERVOY_GOLD\\",
   "servoy_home":    "C:\\Program Files\\Servoy\\2025.12.1.4123\\",
   "servoy_version": "2025.12.1.4123",
-  "mode":           "quarantine"
+  "mode":           "quarantine",
+  "private_plugins": []
 }
 ```
 
-**Developer 3 – different drive letter for the share:**
+**Developer 3 – multiple profiles (stable + nightly):**
+
+Profile `~/.servoy-sync/stable.json`:
 ```json
 {
-  "gold_root":      "Z:\\SERVOY_GOLD\\",
-  "servoy_home":    "D:\\dev\\servoy\\2025.12.1.4123\\",
+  "display_name":   "Stable 2025.12",
+  "gold_root":      "K:\\SERVOY_GOLD\\",
+  "servoy_home":    "C:\\servoys\\2025.12.1.4123\\",
   "servoy_version": "2025.12.1.4123",
-  "mode":           "quarantine"
+  "mode":           "quarantine",
+  "private_plugins": []
+}
+```
+
+Profile `~/.servoy-sync/nightly.json`:
+```json
+{
+  "display_name":   "Nightly 2026.03",
+  "gold_root":      "K:\\SERVOY_GOLD\\",
+  "servoy_home":    "C:\\servoys\\2026.03.0.5000\\",
+  "servoy_version": "2026.03.0.5000",
+  "mode":           "quarantine",
+  "private_plugins": ["hvo-pdf.jar"]
 }
 ```
 
@@ -141,7 +176,8 @@ Only `servoy_version` (and optionally `servoy_home`) needs to change:
 ## Usage
 
 ```
-python plugins_sync.py [--config <path>] [--dry-run] [--verbose] [--status] [--init-config]
+python plugins_sync.py [--config <path>] [--profile <name>] [--dry-run] [--verbose]
+                       [--status] [--launch] [--init-config]
 ```
 
 ### Parameters
@@ -149,7 +185,9 @@ python plugins_sync.py [--config <path>] [--dry-run] [--verbose] [--status] [--i
 | Parameter | Description |
 |---|---|
 | `--init-config` | Interactive setup wizard: prompts for all config fields, validates input, and writes the config file |
-| `--config <path>` | Alternative path to the config file (default: `%USERPROFILE%\.servoy-plugin-sync.json`) |
+| `--config <path>` | Explicit path to a config file |
+| `--profile <name>` | Short form: loads `%USERPROFILE%\.servoy-sync\<name>.json` |
+| `--launch` | Auto-discover profile (picker if multiple), sync, then launch Servoy. Used by `start-servoy.cmd` / `.sh`. |
 | `--dry-run` | Show what would be done without making any changes |
 | `--verbose` | Print DEBUG-level messages (e.g. which files are already up to date) |
 | `--status` | Show current plugin state (OK / MISSING / OUTDATED) without changes. Exit 0 = all current, exit 2 = issues found. |
@@ -164,57 +202,74 @@ python plugins_sync.py [--config <path>] [--dry-run] [--verbose] [--status] [--i
 python plugins_sync.py --init-config
 ```
 
+The wizard asks for **profile name** and **display name** first, then
+`servoy_home`, `gold_root`, `servoy_version`, `mode`, and optional
+`private_plugins` patterns.
+
 Example session:
 
 ```
 ============================================================
  Servoy Gold Plugin Sync – Config Setup Wizard
 ============================================================
-  Target file: C:\Users\max\.servoy-plugin-sync.json
 
 ------------------------------------------------------------
- Step 1/4 – Servoy installation folder (servoy_home)
+ Step 1/6 – Profile name
+------------------------------------------------------------
+  Profile name [default]: stable
+  ✓  Will save to: C:\Users\max\.servoy-sync\stable.json
+
+------------------------------------------------------------
+ Step 2/6 – Display name
+------------------------------------------------------------
+  Display name [stable]: Stable 2025.12
+
+------------------------------------------------------------
+ Step 3/6 – Servoy installation folder (servoy_home)
 ------------------------------------------------------------
   servoy_home: C:\servoys\2025.12.1.4123
   ✓  Detected installed version: 2025.12.1.4123
 
 ------------------------------------------------------------
- Step 2/4 – Gold Share root folder (gold_root)
+ Step 4/6 – Gold Share root folder (gold_root)
 ------------------------------------------------------------
   gold_root: K:\SERVOY_GOLD
   ✓  'plugins' sub-folder found on share.
 
 ------------------------------------------------------------
- Step 3/4 – Servoy version (servoy_version)
+ Step 5/6 – Servoy version (servoy_version)
 ------------------------------------------------------------
   servoy_version [2025.12.1.4123]:
   ✓  manifest.json found on share – version matches the Gold Share.
 
 ------------------------------------------------------------
- Step 4/4 – Plugin removal mode (mode)
+ Step 6/6 – Mode & private plugins
 ------------------------------------------------------------
   mode [quarantine]:
+  private_plugins (comma-separated fnmatch patterns, blank = none):
 
 ------------------------------------------------------------
  Summary – config to be written:
 ------------------------------------------------------------
 {
+  "display_name": "Stable 2025.12",
   "gold_root": "K:\\SERVOY_GOLD",
   "servoy_home": "C:\\servoys\\2025.12.1.4123",
   "servoy_version": "2025.12.1.4123",
-  "mode": "quarantine"
+  "mode": "quarantine",
+  "private_plugins": []
 }
-  Target: C:\Users\max\.servoy-plugin-sync.json
+  Target: C:\Users\max\.servoy-sync\stable.json
 
   Write this config? [Y/n]: Y
-  ✓  Config written to: C:\Users\max\.servoy-plugin-sync.json
+  ✓  Config written to: C:\Users\max\.servoy-sync\stable.json
   Run 'python plugins_sync.py --status' to verify the setup.
 ```
 
-Use `--config` to write to a non-default path:
+To create additional profiles:
 
 ```cmd
-python plugins_sync.py --init-config --config "D:\team\my-config.json"
+python plugins_sync.py --init-config --profile nightly
 ```
 
 ### Normal sync (default config)

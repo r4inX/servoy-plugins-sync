@@ -11,8 +11,9 @@ Er entspricht funktional `start-servoy.cmd` auf Windows: Er führt zuerst `plugi
 ## Voraussetzungen
 
 - Bash (macOS: vorinstalliert; Linux: vorinstalliert)
-- Python 3 (`python3` oder `python` mit Version 3.x)
-- Lokale Config `~/.servoy-plugin-sync.json` angelegt (siehe [docs_plugins_sync.md](docs_plugins_sync.md))
+- Python 3.10+ (`python3` oder `python` mit Version 3.x)
+- Mind. ein Config-Profil angelegt via `python3 plugins_sync.py --init-config`
+  (siehe [docs_plugins_sync.md](docs_plugins_sync.md))
 - Gold-Share gemountet (macOS: `/Volumes/...`, Linux: `/mnt/...`)
 - `plugins_sync.py` liegt im selben Ordner wie `start-servoy.sh`
 
@@ -57,7 +58,8 @@ chmod +x ~/Desktop/Servoy.command
 ./start-servoy.sh
 ```
 
-Das Script hat keine Parameter – alles wird aus `~/.servoy-plugin-sync.json` gelesen.
+Keine Parameter — Profilauswahl, Sync und Servoy-Start werden vollständig von
+`plugins_sync.py --launch` übernommen.
 
 ---
 
@@ -66,22 +68,20 @@ Das Script hat keine Parameter – alles wird aus `~/.servoy-plugin-sync.json` g
 ```
 start-servoy.sh
     │
-    ├─ 1. Python 3 suchen
-    │       ├─ python3  (auf PATH?)
-    │       ├─ python   (Version 3.x?)
-    │       └─ keines → Warnung + Sync-Skip
+    ├─ 1. Python 3 suchen  (python3 → python → Fehler)
     │
-    ├─ 2. Config lesen
-    │       └─ servoy_home via Python aus JSON extrahieren
-    │
-    ├─ 3. plugins_sync.py ausführen
-    │       ├─ Exit 0  → "Sync completed successfully"
-    │       └─ Exit ≠ 0 → Warnung mit Logpfad + weiter
-    │
-    └─ 4. Servoy starten
-            ├─ macOS + Servoy.app vorhanden → open "…/Servoy.app"
-            ├─ Binary vorhanden            → nohup + disown
-            └─ nichts gefunden             → Fehlermeldung + exit 1
+    └─ 2. plugins_sync.py --launch aufrufen
+            │
+            ├─ Profile automatisch erkennen
+            │       ├─ 1 Profil    → direkt verwenden
+            │       ├─ mehrere    → Pfeil-Auswahl-Menü anzeigen
+            │       └─ kein Profil → Fehlermeldung + Exit 1
+            │
+            ├─ Gold-Plugins synchronisieren
+            │       ├─ Share erreichbar → installieren / aktualisieren / quarantänisieren
+            │       └─ Share offline    → Warnung, Sync überspringen
+            │
+            └─ Servoy starten (Binary/App, cwd = developer/)
 ```
 
 ---
@@ -89,29 +89,29 @@ start-servoy.sh
 ## Beispiel-Ausgabe (alles OK – macOS)
 
 ```
-============================================================
- Servoy Gold Plugin Sync – Wrapper
-============================================================
- servoy_home : /Applications/Servoy/2025.12.1.4123
- sync script : /Users/max/dev/servoy-gold-sync/tools/plugins_sync.py
-
-[INFO] Running plugin sync...
-2026-03-02 08:00:01  INFO      ...
+2026-03-02 08:00:01  INFO      Config: /Users/max/.servoy-sync/stable.json
+2026-03-02 08:00:01  INFO      Gold manifest: /Volumes/SERVOY_GOLD/plugins/servoy-2025.12.1.4123/manifest.json
 2026-03-02 08:00:02  INFO      Result: SUCCESS (0 warnings)
-[INFO] Plugin sync completed successfully.
-
-[INFO] Launching (macOS): /Applications/Servoy/2025.12.1.4123/developer/Servoy.app
+2026-03-02 08:00:02  INFO      Launching: open -a '/Applications/Servoy/2025.12.1.4123/Servoy Developer.app'
 ```
 
-## Beispiel-Ausgabe (Sync-Fehler, Servoy startet trotzdem)
+## Beispiel-Ausgabe (mehrere Profile – Auswahl erscheint)
 
 ```
-[WARNING] Plugin sync finished with issues (exit code: 2).
-          Some plugins may not be up to date.
-          Check the log: /Applications/Servoy/2025.12.1.4123/application_server/plugins/gold_plugins_sync.log
-          Starting Servoy anyway...
+  ────────────────────────────────────────────────────────────────
+  Welches Servoy möchtest du starten?
+  Pfeiltasten ↑↓, Enter zum Bestätigen, Ctrl+C zum Abbrechen.
+  ────────────────────────────────────────────────────────────────
+  ▶ stable    Stable 2025.12     /Applications/Servoy/2025.12.1.4123/
+    nightly   Nightly 2026.03    /Applications/Servoy/2026.03.0.5000/
+  ────────────────────────────────────────────────────────────────
+```
 
-[INFO] Launching (macOS): /Applications/Servoy/2025.12.1.4123/developer/Servoy.app
+## Beispiel-Ausgabe (Gold-Share offline, Servoy startet trotzdem)
+
+```
+2026-03-02 08:00:01  WARNING   Gold Share is unavailable – skipping sync and launching Servoy anyway.
+2026-03-02 08:00:01  INFO      Launching: open -a '/Applications/Servoy/2025.12.1.4123/Servoy Developer.app'
 ```
 
 ---
@@ -167,8 +167,9 @@ Falls keines gefunden wird: Fehlermeldung mit den geprüften Pfaden, dann `exit 
 
 | Situation | Verhalten |
 |---|---|
-| Python 3 nicht gefunden | Warnung + Sync-Skip + Servoy startet |
-| Config fehlt | Warnung + Sync-Skip + kein Servoy-Start (kein `servoy_home` bekannt) |
-| Share nicht gemountet | `plugins_sync.py` schlägt fehl (Exit 1) → Warnung + Servoy startet |
-| Sync Exit 2 (Warnungen) | Warnung mit Logpfad + Servoy startet |
-| Servoy-Binary nicht gefunden | Fehlermeldung + `exit 1` |
+| Python 3 nicht gefunden | Fehlermeldung + `exit 1` |
+| `plugins_sync.py` nicht gefunden | Fehlermeldung + `exit 1` |
+| Kein Profil konfiguriert | plugins_sync.py beendet mit Exit 1 |
+| Gold-Share offline | Sync wird mit Warnung übersprungen; Servoy startet trotzdem (Exit 2) |
+| Sync Exit 2 (Warnungen) | Servoy startet trotzdem; Exit Code wird weitergegeben |
+| Servoy-Binary nicht gefunden | plugins_sync.py loggt Fehler, Exit 1 |
