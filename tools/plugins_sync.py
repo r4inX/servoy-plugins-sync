@@ -272,7 +272,7 @@ def _render_picker(profiles: list[dict], selected: int, first: bool) -> None:
     col_ver  = 20
 
     if not first:
-        sys.stderr.write(f"\033[{n + 4}A\033[J")
+        sys.stderr.write(f"\033[{n + 5}A\033[J")
 
     sys.stderr.write(f"  {SEP}\n")
     sys.stderr.write("  Which Servoy would you like to start?\n")
