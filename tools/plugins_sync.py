@@ -182,6 +182,9 @@ def resolve_paths(cfg: dict) -> dict:
 PROFILES_DIR_NAME = ".servoy-sync"
 
 
+class ManifestUnavailableError(Exception):
+    """Raised when the Gold Share manifest cannot be read."""
+
 def profiles_dir() -> str:
     """Return the path to the named-profiles directory (~/.servoy-sync/)."""
     root = os.environ.get("USERPROFILE") or os.path.expanduser("~")
@@ -433,8 +436,12 @@ def load_manifest(manifest_path: str, logger: logging.Logger) -> list[dict]:
     """
     Load manifest.json from the Gold Share.
     Returns list of file entries [{path, sha256, size}, ...].
-    Raises SystemExit(1) on fatal errors (share unreachable, parse error).
+    Raises ManifestUnavailableError on fatal errors (share unreachable, parse error).
     """
+    def _fail(msg: str) -> None:
+        logger.error(msg)
+        raise ManifestUnavailableError(msg)
+
     if not os.path.exists(manifest_path):
         # Walk up the path tree to give a precise, tiered hint about what is wrong.
         # manifest  → <version_dir>/manifest.json
@@ -474,19 +481,17 @@ def load_manifest(manifest_path: str, logger: logging.Logger) -> list[dict]:
             f"Cannot access Gold Share manifest: '{manifest_path}'\n"
             f"{hint}"
         )
-        sys.exit(1)
+        raise ManifestUnavailableError(manifest_path)
 
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        logger.error(f"Cannot read manifest '{manifest_path}': {exc}")
-        sys.exit(1)
+        _fail(f"Cannot read manifest '{manifest_path}': {exc}")
 
     files = data.get("files")
     if not isinstance(files, list):
-        logger.error(f"Manifest '{manifest_path}' has no 'files' list.")
-        sys.exit(1)
+        _fail(f"Manifest '{manifest_path}' has no 'files' list.")
 
     logger.debug(
         f"Manifest loaded: version={data.get('servoy_version')}, "
@@ -1547,7 +1552,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # --- Load manifest ---------------------------------------------------- #
-    manifest_entries = load_manifest(paths["gold_manifest"], logger)
+    try:
+        manifest_entries = load_manifest(paths["gold_manifest"], logger)
+    except ManifestUnavailableError:
+        if args.launch:
+            logger.warning(
+                "Gold Share is unavailable – skipping sync and launching Servoy anyway."
+            )
+            return launch_servoy(cfg["servoy_home"], logger) or 2
+        return 1
 
     # --- Validate versions ----------------------------------------------- #
     manifest_version = None
