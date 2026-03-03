@@ -163,8 +163,9 @@ The script checks in this order:
 
 | Platform | Path | Launch method |
 |---|---|---|
-| macOS | `<servoy_home>/developer/Servoy.app` | `open "..."` |
-| macOS / Linux | `<servoy_home>/developer/servoy` | `nohup ... &` (detached) |
+| macOS | `<servoy_home>/Servoy Developer.app` | `open -a "..."` (detached) |
+| macOS (fallback) | `<servoy_home>/Contents/MacOS/servoy` | `Popen` with `start_new_session` |
+| Linux | `<servoy_home>/developer/Servoy` | `Popen` with `start_new_session` |
 
 If neither is found: error message with the checked paths, then `exit 1`.
 

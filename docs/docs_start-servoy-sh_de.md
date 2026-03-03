@@ -156,8 +156,9 @@ Das Script prüft in dieser Reihenfolge:
 
 | Plattform | Pfad | Start-Methode |
 |---|---|---|
-| macOS | `<servoy_home>/developer/Servoy.app` | `open "..."` |
-| macOS/Linux | `<servoy_home>/developer/servoy` | `nohup ... &` (detached) |
+| macOS | `<servoy_home>/Servoy Developer.app` | `open -a "..."` (detached) |
+| macOS (Fallback) | `<servoy_home>/Contents/MacOS/servoy` | `Popen` mit `start_new_session` |
+| Linux | `<servoy_home>/developer/Servoy` | `Popen` mit `start_new_session` |
 
 Falls keines gefunden wird: Fehlermeldung mit den geprüften Pfaden, dann `exit 1`.
 

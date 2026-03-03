@@ -409,14 +409,30 @@ def launch_servoy(servoy_home: str, logger: logging.Logger) -> int:
         app = os.path.join(home, "Servoy Developer.app")
         if os.path.exists(app):
             logger.info(f"Launching: open -a '{app}'")
-            subprocess.Popen(["open", "-a", app], cwd=dev_dir)
+            subprocess.Popen(
+                ["open", "-a", app],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+            return 0
         else:
-            binary = os.path.join(home, "developer", "Servoy")
+            binary = os.path.join(home, "Contents", "MacOS", "servoy")
             if not os.path.isfile(binary):
                 logger.error(f"Servoy binary not found at '{binary}' or '{app}'")
                 return 1
             logger.info(f"Launching: {binary}")
-            subprocess.Popen([binary], cwd=dev_dir, start_new_session=True, close_fds=True)
+            subprocess.Popen(
+                [binary],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+            return 0
 
     else:   # Linux / other
         binary = os.path.join(home, "developer", "Servoy")
